@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DriveMaster PRO - Планиране</title>
+
+    <!-- ТВОЯТ CSS -->
+    <link rel="stylesheet" href="maincss.css">
+
+    <!-- Leaflet CSS -->
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin=""
+    />
+
+    <!-- Leaflet Routing Machine CSS -->
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"
+    />
+</head>
+<body>
+
+<header class="navbar">
+    <div class="nav-left">
+        <div class="logo">DriveMaster <span>PRO</span></div>
+        <div class="burger" id="burger">☰</div>
+    </div>
+
+    <nav class="nav-links" id="navLinks">
+        <a href="index.html">Начало</a>
+        <a href="#">Планиране</a>
+        <a href="car-health.html">Автомобил</a>
+        <a href="fuel.html">Разход</a>
+    </nav>
+</header>
+
+<section class="hero">
+    <h1>Smart Trip Planner</h1>
+    <p>Тук ще планираме маршрути и изчисляваме разходи.</p>
+</section>
+
+<section class="map-section">
+
+    <div class="route-panel">
+        <!-- ✅ Autocomplete wrapper 1 -->
+        <div class="ac-wrap">
+            <input id="startLocation" type="text" placeholder="Начална точка (напр. Враца)">
+            <div id="startAutocomplete" class="ac-box"></div>
+        </div>
+
+        <!-- ✅ Autocomplete wrapper 2 -->
+        <div class="ac-wrap">
+            <input id="endLocation" type="text" placeholder="Крайна точка (напр. София)">
+            <div id="endAutocomplete" class="ac-box"></div>
+        </div>
+
+        <input
+            type="number"
+            id="carConsumption"
+            placeholder="Разход (л/100 км)"
+            step="0.1"
+            min="0"
+        >
+
+        <button id="planRoute" type="button">Планирай</button>
+    </div>
+
+    <div class="filters">
+        <label><input type="checkbox" id="showCameras" checked> Камери</label>
+        <label><input type="checkbox" id="showDangers" checked> Опасности</label>
+        <label><input type="checkbox" id="showFuel" checked> Бензиностанции</label>
+    </div>
+
+    <div class="trip-summary">
+        <div class="ts-left">
+            <div class="ts-item">
+                <span class="ts-label">Разстояние</span>
+                <span class="ts-value" id="distance">—</span>
+            </div>
+            <div class="ts-item">
+                <span class="ts-label">Време</span>
+                <span class="ts-value" id="time">—</span>
+            </div>
+            <div class="ts-item">
+                <span class="ts-label">Прогн. разход</span>
+                <span class="ts-value" id="fuel">—</span>
+            </div>
+        </div>
+
+        <div class="ts-right">
+            <div class="ts-badge" id="countCameras">📷 0</div>
+            <div class="ts-badge" id="countDangers">⚠️ 0</div>
+            <div class="ts-badge" id="countFuel">⛽ 0</div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+</section>
+
+<!-- Leaflet JS -->
+<script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+></script>
+
+<!-- Leaflet Routing Machine JS -->
+<script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+
+<script>
+    // =========================
+    // MAP INIT
+    // =========================
+    const map = L.map('map').setView([42.6977, 23.3219], 13);
+    let routingControl = null;
+
+    // за панела
+    let lastDistanceKm = null;
+    let lastTimeSec = null;
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // =========================
+    // LAYERS
+    // =========================
+    const cameraLayer = L.layerGroup().addTo(map);
+    const dangerLayer = L.layerGroup().addTo(map);
+    const fuelLayer = L.layerGroup().addTo(map);
+
+    // =========================
+    // ICONS
+    // =========================
+    const cameraIcon = L.divIcon({
+        className: "poi-icon camera",
+        html: "📷",
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
+    });
+
+    const dangerIcon = L.divIcon({
+        className: "poi-icon danger",
+        html: "⚠️",
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
+    });
+
+    const fuelIcon = L.divIcon({
+        className: "poi-icon fuel",
+        html: "⛽",
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
+    });
+
+    // примерни точки
+    L.marker([42.7000, 23.3300], { icon: cameraIcon }).addTo(cameraLayer).bindPopup("Камера – 50 км/ч");
+    L.marker([42.6900, 23.3150], { icon: dangerIcon }).addTo(dangerLayer).bindPopup("Опасен завой");
+    L.marker([42.7050, 23.3200], { icon: fuelIcon }).addTo(fuelLayer).bindPopup("Бензиностанция");
+
+    // =========================
+    // CHECKBOX TOGGLE
+    // =========================
+    function toggleLayer(checkboxId, layer) {
+        const cb = document.getElementById(checkboxId);
+        if (!cb) return;
+
+        cb.addEventListener("change", () => {
+            if (cb.checked) map.addLayer(layer);
+            else map.removeLayer(layer);
+        });
+    }
+    toggleLayer("showCameras", cameraLayer);
+    toggleLayer("showDangers", dangerLayer);
+    toggleLayer("showFuel", fuelLayer);
+
+    // =========================
+    // LEGEND (clickable)
+    // =========================
+    const legend = L.control({ position: "bottomright" });
+    legend.onAdd = function () {
+        const div = L.DomUtil.create("div", "map-legend");
+        div.innerHTML = `
+            <div id="legendCameras">📷 Камери</div>
+            <div id="legendDangers">⚠️ Опасности</div>
+            <div id="legendFuel">⛽ Бензиностанции</div>
+        `;
+        return div;
+    };
+    legend.addTo(map);
+
+    document.getElementById("legendCameras").onclick = () => map.hasLayer(cameraLayer) ? map.removeLayer(cameraLayer) : map.addLayer(cameraLayer);
+    document.getElementById("legendDangers").onclick = () => map.hasLayer(dangerLayer) ? map.removeLayer(dangerLayer) : map.addLayer(dangerLayer);
+    document.getElementById("legendFuel").onclick = () => map.hasLayer(fuelLayer) ? map.removeLayer(fuelLayer) : map.addLayer(fuelLayer);
+
+    // =========================
+    // COUNTS
+    // =========================
+    function updateCounts() {
+        document.getElementById("countCameras").textContent = "📷 " + cameraLayer.getLayers().length;
+        document.getElementById("countDangers").textContent = "⚠️ " + dangerLayer.getLayers().length;
+        document.getElementById("countFuel").textContent = "⛽ " + fuelLayer.getLayers().length;
+    }
+    updateCounts();
+
+    // =========================
+    // TRIP SUMMARY HELPERS
+    // =========================
+    function formatTime(seconds) {
+        const mins = Math.round(seconds / 60);
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return h > 0 ? `${h}ч ${m}м` : `${m}м`;
+    }
+
+    function updateTripSummary(distanceKm, timeSec) {
+        document.getElementById("distance").textContent = `${distanceKm.toFixed(1)} км`;
+        document.getElementById("time").textContent = formatTime(timeSec);
+
+        const consumption = parseFloat(document.getElementById("carConsumption").value);
+        if (!isNaN(consumption) && consumption > 0) {
+            const liters = (distanceKm / 100) * consumption;
+            document.getElementById("fuel").textContent = `${liters.toFixed(1)} л`;
+        } else {
+            document.getElementById("fuel").textContent = "—";
+        }
+    }
+
+    document.getElementById("carConsumption").addEventListener("input", () => {
+        if (lastDistanceKm !== null && lastTimeSec !== null) {
+            updateTripSummary(lastDistanceKm, lastTimeSec);
+        }
+    });
+
+    // =========================
+    // GEOCODING / AUTOCOMPLETE (BG ONLY)
+    // =========================
+    const BG_VIEWBOX = "22.35,41.23,28.61,44.23";
+
+    async function fetchSuggestions(query) {
+        const q = query.includes(",") ? query : `${query}, Bulgaria`;
+        const url =
+            `https://nominatim.openstreetmap.org/search?format=json&limit=6&addressdetails=1&accept-language=bg` +
+            `&countrycodes=bg&bounded=1&viewbox=${BG_VIEWBOX}` +
+            `&q=${encodeURIComponent(q)}`;
+
+        const res = await fetch(url, { headers: { "Accept": "application/json" } });
+        return await res.json();
+    }
+
+    async function geocodeLocation(query) {
+        const results = await fetchSuggestions(query);
+        if (!results || results.length === 0) throw new Error("Not found");
+        return { lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon) };
+    }
+
+    function clearSelectedCoords(inputEl) {
+        delete inputEl.dataset.lat;
+        delete inputEl.dataset.lng;
+    }
+
+    function setupAutocomplete(inputId, boxId) {
+        const input = document.getElementById(inputId);
+        const box = document.getElementById(boxId);
+        let debounceTimer = null;
+
+        input.addEventListener("input", () => {
+            clearSelectedCoords(input);
+            const value = input.value.trim();
+
+            // чистим при малко букви
+            if (value.length < 2) {
+                box.innerHTML = "";
+                box.style.display = "none";
+                return;
+            }
+
+            // debounce (да не spam-ваме API)
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(async () => {
+                try {
+                    const results = await fetchSuggestions(value);
+                    box.innerHTML = "";
+
+                    if (!results || results.length === 0) {
+                        box.style.display = "none";
+                        return;
+                    }
+
+                    results.forEach(r => {
+                        const item = document.createElement("div");
+                        item.className = "ac-item";
+                        item.textContent = r.display_name;
+
+                        item.addEventListener("click", () => {
+                            input.value = r.display_name;
+                            input.dataset.lat = r.lat;
+                            input.dataset.lng = r.lon;
+                            box.innerHTML = "";
+                            box.style.display = "none";
+                        });
+
+                        box.appendChild(item);
+                    });
+
+                    box.style.display = "block";
+                } catch {
+                    box.innerHTML = "";
+                    box.style.display = "none";
+                }
+            }, 250);
+        });
+
+        // ако focus -> да покаже, ако има резултати
+        input.addEventListener("focus", () => {
+            if (box.innerHTML.trim() !== "") box.style.display = "block";
+        });
+    }
+
+    setupAutocomplete("startLocation", "startAutocomplete");
+    setupAutocomplete("endLocation", "endAutocomplete");
+
+    // клик извън dropdown -> затвори
+    document.addEventListener("click", (e) => {
+        const startBox = document.getElementById("startAutocomplete");
+        const endBox = document.getElementById("endAutocomplete");
+
+        if (!e.target.closest(".ac-wrap")) {
+            startBox.style.display = "none";
+            endBox.style.display = "none";
+        }
+    });
+
+    // =========================
+    // ROUTE BUTTON
+    // =========================
+    document.getElementById("planRoute").addEventListener("click", async function () {
+        try {
+            if (!L || !L.Routing) {
+                alert("Routing библиотеката не е заредена (L.Routing липсва).");
+                return;
+            }
+
+            const startInput = document.getElementById("startLocation");
+            const endInput = document.getElementById("endLocation");
+
+            const startText = startInput.value.trim();
+            const endText = endInput.value.trim();
+
+            if (!startText || !endText) {
+                alert("Въведи начална и крайна точка.");
+                return;
+            }
+
+            // 1) Ако е избрано от autocomplete -> ползваме dataset coords
+            // 2) Ако не -> fallback geocode (пак в BG)
+            let start, end;
+
+            if (startInput.dataset.lat && startInput.dataset.lng) {
+                start = { lat: parseFloat(startInput.dataset.lat), lng: parseFloat(startInput.dataset.lng) };
+            } else {
+                start = await geocodeLocation(startText);
+            }
+
+            if (endInput.dataset.lat && endInput.dataset.lng) {
+                end = { lat: parseFloat(endInput.dataset.lat), lng: parseFloat(endInput.dataset.lng) };
+            } else {
+                end = await geocodeLocation(endText);
+            }
+
+            if (routingControl) {
+                map.removeControl(routingControl);
+            }
+
+            routingControl = L.Routing.control({
+                waypoints: [
+                    L.latLng(start.lat, start.lng),
+                    L.latLng(end.lat, end.lng)
+                ],
+                routeWhileDragging: false,
+                addWaypoints: false,
+                show: false
+            }).addTo(map);
+
+            routingControl.on("routesfound", function (e) {
+                const route = e.routes[0];
+                lastDistanceKm = route.summary.totalDistance / 1000;
+                lastTimeSec = route.summary.totalTime;
+                updateTripSummary(lastDistanceKm, lastTimeSec);
+            });
+
+        } catch {
+            alert("Не намерих локацията в България. Пример: 'Враца' и 'София'.");
+        }
+    });
+
+    // =========================
+    // MOBILE NAVBAR (FIX)
+    // =========================
+    document.addEventListener("DOMContentLoaded", function () {
+        const burger = document.getElementById("burger");
+        const navLinks = document.getElementById("navLinks");
+        if (!burger || !navLinks) return;
+
+        burger.addEventListener("click", function () {
+            navLinks.classList.toggle("show");
+        });
+
+        document.querySelectorAll("#navLinks a").forEach(function (link) {
+            link.addEventListener("click", function () {
+                navLinks.classList.remove("show");
+            });
+        });
+    });
+
+    // Leaflet resize fix
+    setTimeout(() => map.invalidateSize(), 200);
+</script>
+
+</body>
+</html>
